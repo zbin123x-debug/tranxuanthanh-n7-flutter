@@ -237,21 +237,15 @@ class AuthScreen extends StatefulWidget {
 }
 
 class _AuthScreenState extends State<AuthScreen> {
-  bool register = false, busy = false, otpStage = false, obscure = true;
-  final full = TextEditingController(),
-      username = TextEditingController(),
-      email = TextEditingController(),
+  bool busy = false, otpStage = false, obscure = true;
+  final username = TextEditingController(),
       password = TextEditingController(),
-      confirm = TextEditingController(),
       otp = TextEditingController();
   String message = '';
   @override
   void dispose() {
-    full.dispose();
     username.dispose();
-    email.dispose();
     password.dispose();
-    confirm.dispose();
     otp.dispose();
     super.dispose();
   }
@@ -296,13 +290,6 @@ class _AuthScreenState extends State<AuthScreen> {
       );
       return;
     }
-    if (register &&
-        (full.text.trim().isEmpty ||
-            !email.text.contains('@') ||
-            password.text != confirm.text)) {
-      setState(() => message = 'Kiểm tra họ tên, email và mật khẩu xác nhận.');
-      return;
-    }
     setState(() {
       busy = true;
       message = '';
@@ -322,19 +309,6 @@ class _AuthScreenState extends State<AuthScreen> {
             MaterialPageRoute(builder: (_) => const HomeScreen()),
           );
         }
-      } else if (register) {
-        final result = await Api.post('/api/auth/register', {
-          'fullName': full.text.trim(),
-          'username': username.text.trim(),
-          'email': email.text.trim(),
-          'password': password.text,
-          'confirmPassword': confirm.text,
-        });
-        setState(() {
-          otpStage = true;
-          message =
-              result['message'] ?? 'Mã OTP đã gửi đến email cá nhân của bạn.';
-        });
       } else {
         final result = await Api.post('/api/auth/login', {
           'username': username.text.trim(),
@@ -380,8 +354,6 @@ class _AuthScreenState extends State<AuthScreen> {
                 Text(
                   otpStage
                       ? 'Xác minh email'
-                      : register
-                      ? 'Tạo tài khoản'
                       : 'Chấm công Nhóm 7',
                   style: Theme.of(context).textTheme.headlineMedium
                       ?.copyWith(fontWeight: FontWeight.w800),
@@ -394,16 +366,6 @@ class _AuthScreenState extends State<AuthScreen> {
                   style: TextStyle(color: Colors.grey.shade700),
                 ),
                 const SizedBox(height: 28),
-                if (register) ...[
-                  TextField(
-                    controller: full,
-                    decoration: const InputDecoration(
-                      labelText: 'Họ và tên',
-                      prefixIcon: Icon(Icons.person_outline),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
                 if (!otpStage)
                   TextField(
                     controller: username,
@@ -412,17 +374,6 @@ class _AuthScreenState extends State<AuthScreen> {
                       prefixIcon: Icon(Icons.alternate_email),
                     ),
                   ),
-                if (register) ...[
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: email,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'Email',
-                      prefixIcon: Icon(Icons.mail_outline),
-                    ),
-                  ),
-                ],
                 if (!otpStage) ...[
                   const SizedBox(height: 12),
                   TextField(
@@ -441,17 +392,6 @@ class _AuthScreenState extends State<AuthScreen> {
                       ),
                     ),
                   ),
-                  if (register) ...[
-                    const SizedBox(height: 12),
-                    TextField(
-                      controller: confirm,
-                      obscureText: true,
-                      decoration: const InputDecoration(
-                        labelText: 'Xác nhận mật khẩu',
-                        prefixIcon: Icon(Icons.lock_reset),
-                      ),
-                    ),
-                  ],
                 ] else
                   TextField(
                     controller: otp,
@@ -486,34 +426,29 @@ class _AuthScreenState extends State<AuthScreen> {
                   label: Text(
                     otpStage
                         ? 'Xác minh và đăng nhập'
-                        : register
-                        ? 'Đăng ký'
                         : 'Đăng nhập',
                   ),
                   style: FilledButton.styleFrom(
                     padding: const EdgeInsets.symmetric(vertical: 16),
                   ),
                 ),
-                if (otpStage)
+                if (otpStage) ...[
                   TextButton.icon(
                     onPressed: busy ? null : resendOtp,
                     icon: const Icon(Icons.refresh),
                     label: const Text('Gửi lại mã OTP'),
-                  )
-                else
+                  ),
                   TextButton(
                     onPressed: busy
                         ? null
                         : () => setState(() {
-                            register = !register;
+                            otpStage = false;
+                            otp.clear();
                             message = '';
                           }),
-                    child: Text(
-                      register
-                          ? 'Đã có tài khoản? Đăng nhập'
-                          : 'Chưa có tài khoản? Đăng ký',
-                    ),
+                    child: const Text('Quay lại đăng nhập'),
                   ),
+                ],
                 const SizedBox(height: 10),
                 Text(
                   'Máy chủ: $apiUrl',
