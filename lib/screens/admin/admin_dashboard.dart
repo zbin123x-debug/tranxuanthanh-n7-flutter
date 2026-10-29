@@ -8,6 +8,7 @@ class AdminDashboard extends StatelessWidget {
     required this.onQrSchedule,
     required this.onProfile,
     required this.onWorkLocations,
+    required this.qrPanel,
   });
 
   final VoidCallback onEmployees;
@@ -15,11 +16,13 @@ class AdminDashboard extends StatelessWidget {
   final VoidCallback onQrSchedule;
   final VoidCallback onProfile;
   final VoidCallback onWorkLocations;
+  final Widget qrPanel;
 
   @override
   Widget build(BuildContext context) => ListView(
     padding: const EdgeInsets.all(16),
     children: [
+      qrPanel,
       Card(
         child: ListTile(
           leading: const Icon(Icons.people_alt_outlined),

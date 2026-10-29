@@ -544,6 +544,107 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
+class ActiveAttendanceQrPanel extends StatefulWidget {
+  const ActiveAttendanceQrPanel({
+    super.key,
+    required this.isAdmin,
+    this.onCheckIn,
+  });
+
+  final bool isAdmin;
+  final Future<void> Function(String token)? onCheckIn;
+
+  @override
+  State<ActiveAttendanceQrPanel> createState() => _ActiveAttendanceQrPanelState();
+}
+
+class _ActiveAttendanceQrPanelState extends State<ActiveAttendanceQrPanel> {
+  Timer? timer;
+  Map<String, dynamic>? session;
+  bool loading = false;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    refresh();
+    timer = Timer.periodic(const Duration(seconds: 5), (_) => refresh());
+  }
+
+  @override
+  void dispose() {
+    timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> refresh() async {
+    if (loading) return;
+    loading = true;
+    try {
+      final token = await storage.read(key: 'access_token');
+      final data = await Api.get('/api/attendance/qr-session/active', token: token);
+      if (!mounted) return;
+      setState(() {
+        session = data as Map<String, dynamic>;
+        error = null;
+      });
+    } catch (e) {
+      if (mounted) setState(() => error = e.toString().replaceFirst('Exception: ', ''));
+    } finally {
+      loading = false;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final active = session?['active'] == true;
+    final qr = active ? (session?['token'] as String?) : null;
+    final nextStarts = session?['nextStartsAtUtc'] as String?;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(active ? Icons.qr_code_2 : Icons.schedule),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    active ? 'QR chấm công đang mở' : 'QR chấm công',
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(onPressed: refresh, tooltip: 'Làm mới QR', icon: const Icon(Icons.refresh)),
+              ],
+            ),
+            if (qr != null) ...[
+              const Text('Mã được cập nhật tự động trong thời gian đã đặt.'),
+              const SizedBox(height: 12),
+              Center(child: QrImageView(data: qr, size: 220, backgroundColor: Colors.white)),
+              if (!widget.isAdmin && widget.onCheckIn != null) ...[
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: loading ? null : () => widget.onCheckIn!(qr),
+                  icon: const Icon(Icons.fact_check_outlined),
+                  label: const Text('Chấm công bằng QR'),
+                ),
+              ],
+            ] else if (nextStarts != null) ...[
+              Text('Mã sẽ tự xuất hiện lúc ${DateTime.parse(nextStarts).toLocal().toString().substring(0, 16)}.'),
+            ] else if (error != null) ...[
+              Text(error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            ] else ...[
+              const Text('Chưa có lịch QR đang mở.'),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class DashboardPage extends StatefulWidget {
   const DashboardPage({super.key, required this.name, required this.role});
   final String name, role;
@@ -554,7 +655,7 @@ class DashboardPage extends StatefulWidget {
 class _DashboardPageState extends State<DashboardPage> {
   bool busy = false;
   String status = 'Chưa chấm công';
-  Future<void> mark(String action) async {
+  Future<void> mark(String action, {String? qrToken}) async {
     setState(() => busy = true);
     try {
       var permission = await Geolocator.checkPermission();
@@ -580,6 +681,7 @@ class _DashboardPageState extends State<DashboardPage> {
         'latitude': p.latitude,
         'longitude': p.longitude,
         'action': action,
+        'qrToken': qrToken,
         'motionMagnitude': motion,
       }, token: token);
       setState(() => status = r['message'] ?? 'Đã ghi nhận');
@@ -614,6 +716,7 @@ class _DashboardPageState extends State<DashboardPage> {
           context,
           MaterialPageRoute(builder: (_) => const WorkLocationsPage()),
         ),
+        qrPanel: const ActiveAttendanceQrPanel(isAdmin: true),
       );
     }
     return ListView(
@@ -700,6 +803,11 @@ class _DashboardPageState extends State<DashboardPage> {
                 ],
               ),
             ),
+          ),
+        if (widget.role != 'Admin')
+          ActiveAttendanceQrPanel(
+            isAdmin: false,
+            onCheckIn: (token) => mark('check-in', qrToken: token),
           ),
         const SizedBox(height: 8),
         Text(
@@ -1410,18 +1518,11 @@ class _QrSchedulePageState extends State<QrSchedulePage> {
     refreshing = true;
     try {
       final accessToken = await storage.read(key: 'access_token');
-      dynamic data;
-      if (sessionId == null) {
-        data = await Api.get('/api/admin/qr-sessions/active', token: accessToken);
-        if (data['active'] == true) {
-          sessionId = data['id'] as int;
-        } else if (data['nextSessionId'] != null) {
-          sessionId = data['nextSessionId'] as int;
-        }
-      }
-      if (sessionId != null) {
-        data = await Api.get('/api/admin/qr-sessions/$sessionId', token: accessToken);
-      }
+      dynamic data = await Api.get('/api/admin/qr-sessions/active', token: accessToken);
+      sessionId = data['active'] == true
+          ? data['id'] as int
+          : data['nextSessionId'] as int?;
+      if (sessionId != null) data = await Api.get('/api/admin/qr-sessions/$sessionId', token: accessToken);
       if (!mounted || data == null) return;
       setState(() {
         if (data['active'] == true) {
@@ -1445,9 +1546,9 @@ class _QrSchedulePageState extends State<QrSchedulePage> {
     }
   }
 
-  Future<void> createSchedule() async {
-    final starts = combine(workDate, startTime);
-    final ends = combine(workDate, endTime);
+  Future<void> createSchedule({bool startNow = false}) async {
+    final starts = startNow ? DateTime.now() : combine(workDate, startTime);
+    final ends = startNow ? starts.add(const Duration(hours: 1)) : combine(workDate, endTime);
     if (!ends.isAfter(starts)) {
       setState(() => message = 'Giờ kết thúc phải sau giờ bắt đầu trong cùng ngày.');
       return;
@@ -1465,7 +1566,9 @@ class _QrSchedulePageState extends State<QrSchedulePage> {
       setState(() {
         sessionId = result['id'] as int;
         qr = null;
-        message = 'Đã đặt lịch QR. Mã sẽ tự xuất hiện trong khung giờ đã chọn.';
+        message = startNow
+            ? 'QR đã tạo và đang mở ngay trong 1 giờ.'
+            : 'Đã đặt lịch QR. Mã sẽ tự xuất hiện trong khung giờ đã chọn.';
       });
       await refreshSession();
     } catch (e) {
@@ -1528,13 +1631,21 @@ class _QrSchedulePageState extends State<QrSchedulePage> {
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                child: SizedBox(
-                  width: double.infinity,
-                  child: FilledButton.icon(
-                    onPressed: busy ? null : createSchedule,
-                    icon: const Icon(Icons.qr_code_2),
-                    label: Text(busy ? 'Đang tạo lịch...' : 'Đặt lịch tạo QR'),
-                  ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: busy ? null : () => createSchedule(startNow: true),
+                      icon: const Icon(Icons.qr_code_2),
+                      label: Text(busy ? 'Đang tạo QR...' : 'Tạo QR ngay (mở 1 giờ)'),
+                    ),
+                    const SizedBox(height: 8),
+                    OutlinedButton.icon(
+                      onPressed: busy ? null : () => createSchedule(),
+                      icon: const Icon(Icons.schedule),
+                      label: Text(busy ? 'Đang tạo lịch...' : 'Đặt lịch QR'),
+                    ),
+                  ],
                 ),
               ),
             ],
