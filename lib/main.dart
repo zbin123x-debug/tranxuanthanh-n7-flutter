@@ -16,7 +16,7 @@ import 'screens/admin/admin_dashboard.dart';
 
 const apiUrl = String.fromEnvironment(
   'API_BASE_URL',
-  defaultValue: 'https://api.example.com',
+  defaultValue: 'https://zbin123xgmailc-001-site1.ktempurl.com',
 );
 const storage = FlutterSecureStorage();
 
@@ -1220,7 +1220,7 @@ class _WorkLocationsPageState extends State<WorkLocationsPage> {
     final name = TextEditingController(text: current?['name'] ?? '');
     final latitude = TextEditingController(text: current?['latitude']?.toString() ?? '');
     final longitude = TextEditingController(text: current?['longitude']?.toString() ?? '');
-    final radius = TextEditingController(text: current?['radiusMeters']?.toString() ?? '250');
+    final radius = TextEditingController(text: '20');
     String? error;
     bool gettingGps = false, saving = false;
     await showDialog<void>(
@@ -1237,7 +1237,7 @@ class _WorkLocationsPageState extends State<WorkLocationsPage> {
                   TextField(controller: name, decoration: const InputDecoration(labelText: 'Tên vị trí')),
                   TextField(controller: latitude, keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true), decoration: const InputDecoration(labelText: 'Vĩ độ')),
                   TextField(controller: longitude, keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true), decoration: const InputDecoration(labelText: 'Kinh độ')),
-                  TextField(controller: radius, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Bán kính cho phép (mét)')),
+                  TextField(controller: radius, readOnly: true, decoration: const InputDecoration(labelText: 'Bán kính chấm công cố định (mét)')),
                   Align(
                     alignment: Alignment.centerLeft,
                     child: TextButton.icon(
@@ -1347,12 +1347,12 @@ class _WorkLocationsPageState extends State<WorkLocationsPage> {
             children: [
               const Padding(padding: EdgeInsets.all(8), child: Text('Có thể đứng tại công ty và bấm “Dùng GPS hiện tại của Admin” để điền tọa độ. Vị trí và bán kính được dùng để tính khoảng cách cho các lượt chấm công mới.')),
               ...items.map((item) {
-                final radiusKm = ((item['radiusMeters'] as num).toDouble() / 1000).toStringAsFixed(2);
+                final radiusMeters = (item['radiusMeters'] as num?)?.toDouble() ?? 20;
                 return Card(
                   child: ListTile(
                     leading: const Icon(Icons.location_on_outlined),
                     title: Text(item['name'] ?? ''),
-                    subtitle: Text('GPS: ${item['latitude']}, ${item['longitude']}\nBán kính: $radiusKm km${item['isLegacyConfig'] == true ? '\nĐang dùng cấu hình vị trí cũ' : ''}'),
+                    subtitle: Text('GPS: ${item['latitude']}, ${item['longitude']}\nBán kính chấm công: ${radiusMeters.toStringAsFixed(0)} m${item['isLegacyConfig'] == true ? '\nĐang dùng cấu hình vị trí cũ' : ''}'),
                     isThreeLine: true,
                     trailing: Wrap(
                       spacing: 0,
@@ -1847,16 +1847,23 @@ class AdminEmployeesPage extends StatefulWidget {
 class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
   late Future<dynamic> future;
   final searchController = TextEditingController();
+  bool includeDeleted = false;
   @override
   void initState() {
     super.initState();
     future = load();
   }
 
-  Future<dynamic> load([String? search]) async => Api.get(
-    '/api/admin/employees${search == null || search.trim().isEmpty ? '' : '?search=${Uri.encodeQueryComponent(search.trim())}'}',
-    token: await storage.read(key: 'access_token'),
-  );
+  Future<dynamic> load([String? search]) async {
+    final params = <String, String>{'includeDeleted': '$includeDeleted'};
+    if (search != null && search.trim().isNotEmpty) {
+      params['search'] = search.trim();
+    }
+    return Api.get(
+      '/api/admin/employees?${Uri(queryParameters: params).query}',
+      token: await storage.read(key: 'access_token'),
+    );
+  }
   @override
   void dispose() {
     searchController.dispose();
@@ -2020,6 +2027,35 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
     }
   }
 
+  Future<void> deleteEmployee(Map<String, dynamic> x) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Xóa nhân viên?'),
+        content: Text(
+          'Tài khoản ${x['username']} sẽ bị khóa và ẩn khỏi danh sách. Lịch sử chấm công và phân ca vẫn được giữ.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Hủy')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Xóa nhân viên')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    try {
+      await Api.request(
+        'DELETE',
+        '/api/admin/employees/${x['id']}',
+        token: await storage.read(key: 'access_token'),
+      );
+      if (mounted) setState(() => future = load(searchController.text));
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+      }
+    }
+  }
+
   Future<void> edit(Map<String, dynamic> x) async {
     final name = TextEditingController(text: x['fullName']);
     final email = TextEditingController(text: x['email']);
@@ -2107,6 +2143,17 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
             ),
           ),
         ),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: FilterChip(
+            label: const Text('Hiện nhân viên đã xóa'),
+            selected: includeDeleted,
+            onSelected: (value) => setState(() {
+              includeDeleted = value;
+              future = load(searchController.text);
+            }),
+          ),
+        ),
         Expanded(
           child: FutureBuilder(
             future: future,
@@ -2129,17 +2176,20 @@ class _AdminEmployeesPageState extends State<AdminEmployeesPage> {
                       onTap: () => detail(x['id']),
                       leading: const CircleAvatar(child: Icon(Icons.person)),
                       title: Text(x['fullName'] ?? ''),
-                      subtitle: Text('${x['username']} · ${x['email']}'),
+                      subtitle: Text(
+                        '${x['username']} · ${x['email']} · ${x['isDeleted'] == true ? 'Đã xóa' : x['isActive'] == true ? 'Đang hoạt động' : 'Đã vô hiệu hóa'}',
+                      ),
                       trailing: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           IconButton(
-                            onPressed: () => edit(x),
+                            onPressed: x['isDeleted'] == true ? null : () => edit(x),
                             icon: const Icon(Icons.edit_outlined),
                           ),
-                          Switch(
-                            value: x['isActive'] == true,
-                            onChanged: (v) => setActive(x, v),
+                          IconButton(
+                            tooltip: x['isDeleted'] == true ? 'Đã xóa' : 'Xóa nhân viên',
+                            onPressed: x['isDeleted'] == true ? null : () => deleteEmployee(x),
+                            icon: const Icon(Icons.delete_outline),
                           ),
                         ],
                       ),
@@ -2740,8 +2790,19 @@ class _AdminAttendancesPageState extends State<AdminAttendancesPage> {
                   Text(
                     'Cách công ty: ${row['distanceKilometers'] == null ? 'Chưa xác minh GPS' : '${(row['distanceKilometers'] as num).toStringAsFixed(2)} km'}',
                   ),
+                  Text(
+                    'GPS khi check-out: ${shown(row['checkOutLatitude'])}, ${shown(row['checkOutLongitude'])}',
+                  ),
+                  Text(
+                    'Vị trí công ty khi check-out: ${shown(row['checkOutWorkLocationName'])}',
+                  ),
+                  Text(
+                    'Khoảng cách khi check-out: ${row['checkOutDistanceMeters'] == null ? 'Chưa xác minh GPS' : '${(row['checkOutDistanceMeters'] as num).toStringAsFixed(0)} m · ${(row['checkOutDistanceMeters'] as num) <= 20 ? 'Trong 20 m' : 'Ngoài 20 m'}'}',
+                  ),
                   if (row['latitude'] != null && row['longitude'] != null)
                     SelectableText('Bản đồ: https://maps.google.com/?q=${row['latitude']},${row['longitude']}'),
+                  if (row['checkOutLatitude'] != null && row['checkOutLongitude'] != null)
+                    SelectableText('Bản đồ check-out: https://maps.google.com/?q=${row['checkOutLatitude']},${row['checkOutLongitude']}'),
                   Text(
                     'Chuyển động: ${shown(row['motionMagnitude'])}',
                   ),
